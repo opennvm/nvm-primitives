@@ -19,7 +19,7 @@ See the 'DIY On-Premises -> User-space NVM Primitives' section under http://open
 
 ## 3. NVM PRIMITIVES API REFERENCE
 
-http://opennvm.github.io/nvm-primitives-documents/Default.htm
+http://opennvm.github.io/nvm-primitives-documents/
 
 ## 4. NVM PRIMITIVES SAMPLE CODE
 
