@@ -42,6 +42,7 @@
 #include <nvm/nvm_types.h>
 #define MAX_DEV_NAME_SIZE 256
 
+
 /******************************************************************************
  * These macros correspond to the NVM_PRIMITIVES_API_* version macros for
  * the library version for which this code was designed/written/modified.
@@ -113,6 +114,7 @@ int main(int argc, char *argv[])
     nvm_logical_range_iter_t     logical_range_iterator;
     nvm_iovec_t                 *iov = NULL;
     uint64_t                     io_size_in_bytes;
+    uint64_t                     iov_size_in_bytes;
     uint64_t                     io_size_in_sectors;
     uint64_t                     nvm_cap_atomic_max_iovs;
     uint64_t                     nvm_cap_atomic_write_multiplicity;
@@ -129,6 +131,7 @@ int main(int argc, char *argv[])
     uint32_t                     batch_size = 0;
     bool atomic_write_available = false;
     bool atomic_trim_available = false;
+    uint64_t                     nvm_cap_atomic_write_max_total_size;
 
 
     if (argc < 2)
@@ -208,6 +211,7 @@ int main(int argc, char *argv[])
     nvm_cap_array[8].cap_id  = NVM_CAP_ATOMIC_TRIM_MAX_VECTOR_SIZE_ID;
     nvm_cap_array[9].cap_id  = NVM_CAP_LOGICAL_ITER_MAX_NUM_RANGES_ID;
     nvm_cap_array[10].cap_id = NVM_CAP_SECTOR_SIZE_ID;
+    nvm_cap_array[11].cap_id = NVM_CAP_ATOMIC_WRITE_MAX_TOTAL_SIZE_ID;
 
     //This particular invocation of the API tells the library that we are
     //requesting for a specific set of capabilities
@@ -257,6 +261,8 @@ int main(int argc, char *argv[])
                                nvm_cap_array[9].retcode, false);
         print_cap_status_value("Sector Size(bytes)", nvm_cap_array[10].cap_value,
                                nvm_cap_array[10].retcode, false);
+        print_cap_status_value("Atomic write max total size in bytes, whether batched or single",
+                               nvm_cap_array[11].cap_value, nvm_cap_array[11].retcode, false);
         printf("************************************************************\n");
 
         //If we couldn't get all the capabilities we wanted, we exit
@@ -278,6 +284,7 @@ int main(int argc, char *argv[])
     nvm_cap_atomic_trim_max_vector_size   = nvm_cap_array[8].cap_value;
     nvm_cap_logical_iter_max_num_ranges   = nvm_cap_array[9].cap_value;
     sector_size                           = nvm_cap_array[10].cap_value;
+    nvm_cap_atomic_write_max_total_size   = nvm_cap_array[11].cap_value;
 
 
     /**********************/
@@ -348,11 +355,8 @@ int main(int argc, char *argv[])
     /* Align the buffer.        */
     /* Fill the buffer with 'z' */
     /****************************/
-    //We get the value of maximum atomic write size using the capabilities
-    //queried earlier
-    io_size_in_bytes   = nvm_cap_atomic_max_iovs
-        * nvm_cap_atomic_write_max_vector_size
-        * nvm_cap_atomic_write_multiplicity;
+    //We will write the maximum amount allowed
+    io_size_in_bytes   = nvm_cap_atomic_write_max_total_size;
 
     /****************************/
     /* Do the atomic write of   */
@@ -472,15 +476,13 @@ int main(int argc, char *argv[])
     }
     printf("************************************************************\n");
 
-    /**************************************/
-    /* Perform a batch atomic write with  */
-    /* a batch size of 30. First IOV will */
-    /* trim data (max allowed)            */
-    /* written by previous atomic writes  */
-    /* next IOV's will write maximum      */
-    /* possible data. The first write IOV */
-    /* starts at sector 65536             */
-    /**************************************/
+    /************************************************************************/
+    /* Perform a batch atomic write with a batch size of 30. First IOV will */
+    /* trim data (max allowed) written by previous atomic write. Next IOV's */
+    /* will write maximum possible data. Note that the sum of the sizes of  */
+    /* all write IOVs should not be more than the maximum allowed. The      */
+    /* first write IOV starts at sector 65536.                              */
+    /************************************************************************/
 
     //we check for both atomic write and atomic trim features
     //since we have both trim and write IOVs in our batch
@@ -488,29 +490,33 @@ int main(int argc, char *argv[])
     {
         printf("************************************************************\n");
         batch_size = 30;
-        //First check if we can write a batch of this size
+        //each write IOV in this batch will write maximum allowed for an IOV
+        iov_size_in_bytes = nvm_cap_atomic_write_max_vector_size
+            * nvm_cap_atomic_write_multiplicity;
+        //Calculate total size of the amount of data to be written atomically
+        io_size_in_bytes = batch_size * iov_size_in_bytes;
+        //Check if we can write a batch of this size
         //by comparing to the value returned for the capability
         //NVM_CAP_ATOMIC_MAX_IOVS_ID
         //If batch_size is greater, then this batch can be split into multiple
         //batches. But for simplicity, we are not doing that here
-        if (batch_size <= nvm_cap_atomic_max_iovs)
+        //Also check that the sum of sizes of all write IOVs is not more
+        //than the max allowed which is returned by the capability
+        //NVM_CAP_ATOMIC_WRITE_MAX_TOTAL_SIZE_ID
+        if (batch_size <= nvm_cap_atomic_max_iovs &&
+            io_size_in_bytes <= nvm_cap_atomic_write_max_total_size)
         {
-            //each write IOV in this batch will write maximum allowed amount
-            //of data
-            io_size_in_bytes = nvm_cap_atomic_write_max_vector_size
-                * nvm_cap_atomic_write_multiplicity;
-
             if (buf)
             {
                 free(buf);
             }
             if ((posix_memalign((void **) &buf, nvm_cap_atomic_write_start_align,
-                                io_size_in_bytes)) != 0)
+                                iov_size_in_bytes)) != 0)
             {
                 printf("posix_memalign: failed, errno = %d\n", errno);
                 goto exit;
             }
-            memset((void *) buf, 'a', io_size_in_bytes);
+            memset((void *) buf, 'a', iov_size_in_bytes);
 
             iov = (nvm_iovec_t *) malloc(sizeof(nvm_iovec_t) * batch_size);
             if (iov == NULL)
@@ -541,10 +547,10 @@ int main(int argc, char *argv[])
             for (i = 1; i < batch_size; i++)
             {
                 iov[i].iov_base   = (uint64_t)((uintptr_t) buf);
-                iov[i].iov_len    = io_size_in_bytes;
+                iov[i].iov_len    = iov_size_in_bytes;
                 iov[i].iov_opcode = NVM_IOV_WRITE;
                 iov[i].iov_lba    = block_start;
-                block_start = iov[i].iov_lba + io_size_in_bytes / sector_size;
+                block_start = iov[i].iov_lba + iov_size_in_bytes / sector_size;
             }
 
             /**************************************/
@@ -569,6 +575,11 @@ int main(int argc, char *argv[])
                        iov[i].iov_lba, iov[i].iov_lba + (iov[i].iov_len / sector_size));
             }
             printf("************************************************************\n");
+        }
+        else
+        {
+            printf("Number of IOVs more than max allowed or amount of data being "
+                   "written atomically exceeds 4MiB\n");
         }
     }
 
