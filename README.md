@@ -42,7 +42,7 @@ See the 'DIY On-Premises -> User-space NVM Primitives' section under http://open
 
 1. Login as root
 
-2. Disable _auto_attach_ by issuing the following command:
+2. Disable auto_attach by issuing the following command:
          
          #insmod iomemory-vsl auto_attach=0
          
@@ -70,7 +70,7 @@ See the 'DIY On-Premises -> User-space NVM Primitives' section under http://open
 
          rpm -ivh libnvm-dev-<kernel version>.<version>-1.0.el6.x86_64.rpm
          
-   Note: If libnvm-dev from a previous early-access release is already installed, please uninstall it before installing the packages for 0.7
+   Note: If libnvm-dev from a previous early-access release is already installed, please uninstall it before installing the packages for 1.0.0
    
          rpm -e <ioMemory SDK package name>
          
